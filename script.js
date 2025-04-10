@@ -88,7 +88,7 @@
     };
 
     const startHighlighting = () => {
-        const isOzon = location.hostname.includes("");
+        const isOzon = location.hostname.includes("ozon.ru");
         const isYandex = location.hostname.includes("yandex.market");
         debug("Запуск подсветки. isOzon:", isOzon, "isYandex:", isYandex);
 
