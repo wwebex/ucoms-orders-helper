@@ -1,111 +1,137 @@
 // ==UserScript==
 // @name         Highlight Quantity and Keywords in Order Details
 // @namespace    http://tampermonkey.net/
-// @version      2.0
-// @description  highlighting quantity and keywords ozon+yandex.market
+// @version      3.2
+// @description  Highlighting quantity and keywords on Ozon and Yandex.Market with debug logs and thresholds for quantity color coding
 // @author       оксимирон)))
-// @match        *://*/*
+// @match        *://*.ozon.ru/*
+// @match        *://*.yandex.market/*
 // @grant        none
 // ==/UserScript==
 
-(function () {
-    'use strict';
+(() => {
+    "use strict";
 
-    const COLOR_WARNING = '#fbbc04';
-    const COLOR_DANGER = '#DB4437';
-    const COLOR_HIGHLIGHT = '#1a73e8';
     const FONT_BOLD = true;
-    const KEYWORDS = ["HDD", "WI-FI"];
+    const KEYWORDS = ["HDD", "WI-FI", "WIFI", "DDR5", "Товар уцененный"];
 
-    function isProductId(text) {
-        // Проверка на формат строки типа ju-gmrum2-532-5500-rx6600-hdd1
-        const productIdRegex = /^[a-z0-9\-]+$/i;
-        return productIdRegex.test(text);
-    }
+    const COLOR_ORANGE = "#ff9800";
+    const COLOR_RED = "#f44336";
 
-    function highlightQuantity() {
-        document.querySelectorAll('span').forEach(span => {
-            if (span.dataset.__highlightedQty) return;
+    const debug = (...args) => console.log("[Highlight Debug]", ...args);
 
-            const regex = /(\d+)\s?(шт\.)/i;
-            const match = span.textContent.match(regex);
-            if (match) {
-                const count = parseInt(match[1]);
-                const fullMatch = match[0];
-                const color = count > 5 ? COLOR_DANGER : COLOR_WARNING;
+    const highlightText = (node, keywords, { color, fontWeight }) => {
+        if (!node || !node.textContent) return;
+        const originalText = node.textContent;
+        let replaced = false;
 
-                const styledSpan = document.createElement('span');
-                styledSpan.textContent = fullMatch;
-                styledSpan.style.fontWeight = FONT_BOLD ? 'bold' : 'normal';
-                styledSpan.style.color = color;
-
-                span.innerHTML = span.innerHTML.replace(regex, styledSpan.outerHTML);
-                span.dataset.__highlightedQty = "true";
+        const highlightedHTML = originalText.replace(
+            new RegExp(`\\b(${keywords.join("|")})\\b`, "gi"),
+            (match) => {
+                replaced = true;
+                debug(`Ключевое слово найдено: "${match}"`);
+                return `<span style="color:${color}; font-weight:${fontWeight};">${match}</span>`;
             }
+        );
+
+        if (replaced) {
+            const span = document.createElement("span");
+            span.innerHTML = highlightedHTML;
+            node.replaceWith(span);
+            debug("Ключевые слова подсвечены в:", originalText);
+        } else {
+            debug("Нет ключевых слов в:", originalText);
+        }
+    };
+
+    const highlightQuantity = (node) => {
+        if (!node || !node.textContent) return;
+
+        const text = node.textContent;
+        const match = text.match(/\b(\d+)\s?(шт|штук|pieces|pcs)?\b/i);
+
+        if (match) {
+            const number = parseInt(match[1]);
+            if (number === 1) {
+                debug("Одна штука — пропущено:", text);
+                return; // не подсвечиваем 1 шт
+            }
+
+            const color = number >= 5 ? COLOR_RED : COLOR_ORANGE;
+            const fontWeight = FONT_BOLD ? "bold" : "normal";
+
+            debug(`Количество найдено: ${number}, цвет: ${color}`);
+
+            node.innerHTML = text.replace(
+                match[0],
+                `<span style="color:${color}; font-weight:${fontWeight};">${match[0]}</span>`
+            );
+        } else {
+            debug("Количество не найдено в:", text);
+        }
+    };
+
+    const waitForElements = (selectors, callback, maxAttempts = 20) => {
+        let attempts = 0;
+        const interval = setInterval(() => {
+            const elements = selectors.map(sel => Array.from(document.querySelectorAll(sel))).flat();
+            debug(`Попытка ${attempts + 1}/${maxAttempts}, найдено элементов: ${elements.length}`);
+            if (elements.length > 0 || attempts >= maxAttempts) {
+                clearInterval(interval);
+                if (elements.length === 0) {
+                    debug("Элементы не найдены по селекторам:", selectors);
+                }
+                callback(elements);
+            }
+            attempts++;
+        }, 500);
+    };
+
+    const startHighlighting = () => {
+        const isOzon = location.hostname.includes("");
+        const isYandex = location.hostname.includes("yandex.market");
+        debug("Запуск подсветки. isOzon:", isOzon, "isYandex:", isYandex);
+
+        // Quantity
+        const quantitySelectors = [
+            isOzon ? "div[class^='two-line-cell_primary_'] span:nth-of-type(2)" : null,
+            isYandex ? "span[class^='__use--kind_bodyBold___']" : null,
+        ].filter(Boolean);
+
+        waitForElements(quantitySelectors, (nodes) => {
+            debug("Обработка количества, элементов:", nodes.length);
+            nodes.forEach(highlightQuantity);
         });
-    }
 
-    function highlightOrderDescriptions() {
-        document.querySelectorAll('div[class*="order-details-body-cell-content"]').forEach(div => {
-            if (div.dataset.__highlightedKw) return;
-            let html = div.innerHTML;
-            KEYWORDS.forEach(keyword => {
-                const regex = new RegExp(`(${keyword})`, 'gi');
-                html = html.replace(regex, `<span style="color:${COLOR_HIGHLIGHT}; font-weight:${FONT_BOLD ? 'bold' : 'normal'};">$1</span>`);
-            });
-            if (html !== div.innerHTML) {
-                div.innerHTML = html;
-                div.dataset.__highlightedKw = "true";
-            }
+        // Description
+        const descriptionSelectors = [
+            isOzon ? "div[class^='order-details-body-cell-content_breakWord_']" : null,
+            isYandex ? "div[class^='style-aligner___']" : null,
+        ].filter(Boolean);
+
+        waitForElements(descriptionSelectors, (nodes) => {
+            debug("Обработка описаний, элементов:", nodes.length);
+            nodes.forEach((node) =>
+                highlightText(node, KEYWORDS, {
+                    color: "#1a73e8",
+                    fontWeight: FONT_BOLD ? "bold" : "normal",
+                })
+            );
         });
-    }
+    };
 
-    function highlightYandexMarket() {
-        document.querySelectorAll('span[class*="___Tag___"]').forEach(span => {
-            if (span.dataset.__highlightedYm) return;
-
-            let textContent = span.textContent.trim();
-
-            if (isProductId(textContent)) return;
-
-            // Подсветка количества товаров (например, 3 шт.)
-            const regexQty = /(\d+)\s?(шт\.)/i;
-            const matchQty = span.textContent.match(regexQty);
-            if (matchQty) {
-                const count = parseInt(matchQty[1]);
-                const fullMatch = matchQty[0];
-                const color = count > 5 ? COLOR_DANGER : COLOR_WARNING;
-
-                const styledSpan = document.createElement('span');
-                styledSpan.textContent = fullMatch;
-                styledSpan.style.fontWeight = FONT_BOLD ? 'bold' : 'normal';
-                styledSpan.style.color = color;
-
-                span.innerHTML = span.innerHTML.replace(regexQty, styledSpan.outerHTML);
+    const observeURLChanges = () => {
+        let lastUrl = location.href;
+        new MutationObserver(() => {
+            const currentUrl = location.href;
+            if (currentUrl !== lastUrl) {
+                lastUrl = currentUrl;
+                debug("Обнаружено изменение URL, повторный запуск скрипта");
+                startHighlighting();
             }
+        }).observe(document, { subtree: true, childList: true });
+    };
 
-            // Подсветка ключевых слов в описаниях
-            let html = span.innerHTML;
-            KEYWORDS.forEach(keyword => {
-                const regexKw = new RegExp(`(${keyword})`, 'gi');
-                html = html.replace(regexKw, `<span style="color:${COLOR_HIGHLIGHT}; font-weight:${FONT_BOLD ? 'bold' : 'normal'};">$1</span>`);
-            });
-
-            if (html !== span.innerHTML) {
-                span.innerHTML = html;
-                span.dataset.__highlightedYm = "true";
-            }
-        });
-    }
-
-    function highlightAll() {
-        highlightQuantity();
-        highlightOrderDescriptions();
-        highlightYandexMarket();
-    }
-
-    const observer = new MutationObserver(highlightAll);
-    observer.observe(document.body, { childList: true, subtree: true });
-    window.addEventListener('load', highlightAll);
-    document.addEventListener('DOMContentLoaded', highlightAll);
+    startHighlighting();
+    observeURLChanges();
 })();
